@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>手機簽到版</title>
+  <title>手機簽到 Git 版</title>
   <style>
     :root {
       --bg: #ecf5f1;
@@ -127,9 +127,120 @@
     .msg.ok { display: block; background: #e7f7ef; color: #0c7a5b; }
     .msg.err { display: block; background: #fdecec; color: var(--err); }
 
+    .mode-btn {
+      flex: 1;
+    }
+
+    .mode-content {
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .mode-btn.active {
+      background: linear-gradient(135deg, var(--ok), var(--ok2));
+      color: #fff;
+    }
+
+    .leader-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 12px 0;
+    }
+
+    .stat-box {
+      background: linear-gradient(135deg, var(--ok), var(--ok2));
+      color: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 32px;
+      font-weight: 700;
+    }
+
+    .stat-label {
+      font-size: 13px;
+      margin-top: 4px;
+      opacity: 0.9;
+    }
+
+    .filter-btn {
+      padding: 8px 12px;
+      font-size: 13px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      cursor: pointer;
+      flex: 1;
+    }
+
+    .filter-btn.active {
+      background: linear-gradient(135deg, var(--ok), var(--ok2));
+      color: #fff;
+      border: none;
+    }
+
+    .roster-list {
+      margin-top: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .roster-item {
+      background: #f6fbf8;
+      border: 1px solid #cde0d5;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+
+    .roster-item.arrived {
+      border-left: 4px solid var(--ok);
+      opacity: 0.7;
+    }
+
+    .roster-item.pending {
+      border-left: 4px solid var(--err);
+    }
+
+    .roster-item.leave {
+      border-left: 4px solid #f39c12;
+      opacity: 0.7;
+    }
+
+    .roster-name {
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .roster-info {
+      color: var(--sub);
+      font-size: 12px;
+    }
+
+    .roster-status {
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .roster-item.arrived .roster-status { color: var(--ok); }
+    .roster-item.pending .roster-status { color: var(--err); }
+    .roster-item.leave .roster-status { color: #f39c12; }
+
     @media (max-width: 520px) {
       .btn-row, .search-row { grid-template-columns: 1fr; }
       h1 { font-size: 22px; }
+      .filter-btn { padding: 6px 10px; }
     }
   </style>
 </head>
@@ -140,42 +251,99 @@
       <p class="sub">Git 前端版，可直接串 Apps Script API</p>
 
       <div class="field">
+        <label>模式選擇</label>
+        <div class="btn-row">
+          <button id="modeCheckin" type="button" class="mode-btn active">簽到</button>
+          <button id="modeLeader" type="button" class="mode-btn secondary">領隊</button>
+        </div>
+      </div>
+
+      <div class="field">
         <label>Deployment ID</label>
         <input id="deploymentId" value="AKfycbx2ApnFISmJHCyb5Aa_kK2UKdGAqMZlUSpx3EV6EpIhMKNxjF11EWRekXPqjK3-WH-o" />
       </div>
 
-      <div class="field">
-        <label>活動代碼</label>
-        <input id="eventCode" placeholder="例如 EVT20260623" />
-      </div>
+      <!-- 簽到模式 -->
+      <div id="checkinMode" class="mode-content">
+        <div class="field">
+          <label>活動代碼</label>
+          <input id="eventCode" placeholder="例如 EVT20260623" />
+        </div>
 
-      <div class="field">
-        <label>QR 內容</label>
-        <input id="identifier" placeholder="掃描或貼上 QR 字串" />
-      </div>
+        <div class="field">
+          <label>QR 內容</label>
+          <input id="identifier" placeholder="掃描或貼上 QR 字串" />
+        </div>
 
-      <div class="scanner">
-        <video id="video" playsinline muted></video>
+        <div class="scanner">
+          <video id="video" playsinline muted></video>
+          <div class="btn-row">
+            <button id="btnStart" type="button">開始掃描</button>
+            <button id="btnStop" type="button" class="secondary" disabled>停止掃描</button>
+          </div>
+          <div id="scanHint" class="hint">先按開始掃描，或手動貼上 QR 內容。</div>
+        </div>
+
         <div class="btn-row">
-          <button id="btnStart" type="button">開始掃描</button>
-          <button id="btnStop" type="button" class="secondary" disabled>停止掃描</button>
+          <button id="btnSubmit" type="button">手動送出</button>
+          <button id="btnLoadEvents" type="button" class="secondary">讀取活動</button>
         </div>
-        <div id="scanHint" class="hint">先按開始掃描，或手動貼上 QR 內容。</div>
+
+        <details class="search-box">
+          <summary>依姓名搜尋</summary>
+          <div class="search-row">
+            <input id="nameQuery" placeholder="輸入姓名關鍵字" />
+            <button id="btnSearch" type="button" class="secondary">搜尋</button>
+          </div>
+          <div id="searchResults"></div>
+        </details>
       </div>
 
-      <div class="btn-row">
-        <button id="btnSubmit" type="button">手動送出</button>
-        <button id="btnLoadEvents" type="button" class="secondary">讀取活動</button>
-      </div>
-
-      <details class="search-box">
-        <summary>依姓名搜尋</summary>
-        <div class="search-row">
-          <input id="nameQuery" placeholder="輸入姓名關鍵字" />
-          <button id="btnSearch" type="button" class="secondary">搜尋</button>
+      <!-- 領隊模式 -->
+      <div id="leaderMode" class="mode-content" style="display:none;">
+        <div class="field">
+          <label>領隊手機號碼</label>
+          <div class="search-row">
+            <input id="leaderPhone" placeholder="例如 0928014772" />
+            <button id="btnVerifyLeader" type="button" class="secondary">驗證</button>
+          </div>
         </div>
-        <div id="searchResults"></div>
-      </details>
+
+        <div id="leaderVerifying" style="display:none;">
+          <p class="sub">驗證中...</p>
+        </div>
+
+        <div id="leaderVerified" style="display:none;">
+          <div class="field">
+            <label>選擇活動</label>
+            <div id="leaderEvents"></div>
+          </div>
+
+          <div id="leaderSummaryContainer" style="display:none;">
+            <div class="leader-stats">
+              <div class="stat-box">
+                <div class="stat-value" id="arrivedCount">0</div>
+                <div class="stat-label">已到</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-value" id="totalCount">0</div>
+                <div class="stat-label">總數</div>
+              </div>
+            </div>
+
+            <div class="field">
+              <label>篩選</label>
+              <div class="btn-row" style="grid-template-columns: 1fr 1fr 1fr;">
+                <button class="filter-btn active" data-filter="all">全部</button>
+                <button class="filter-btn" data-filter="pending">未到</button>
+                <button class="filter-btn" data-filter="arrived">已到</button>
+              </div>
+            </div>
+
+            <div id="leaderRoster" class="roster-list"></div>
+          </div>
+        </div>
+      </div>
 
       <div id="msg" class="msg"></div>
     </section>
@@ -196,9 +364,28 @@
     const btnSearch = document.getElementById('btnSearch');
     const btnLoadEvents = document.getElementById('btnLoadEvents');
 
+    // 領隊模式相關元素
+    const modeCheckinBtn = document.getElementById('modeCheckin');
+    const modeLeaderBtn = document.getElementById('modeLeader');
+    const checkinModeEl = document.getElementById('checkinMode');
+    const leaderModeEl = document.getElementById('leaderMode');
+    const leaderPhoneEl = document.getElementById('leaderPhone');
+    const btnVerifyLeader = document.getElementById('btnVerifyLeader');
+    const leaderVerifyingEl = document.getElementById('leaderVerifying');
+    const leaderVerifiedEl = document.getElementById('leaderVerified');
+    const leaderEventsEl = document.getElementById('leaderEvents');
+    const leaderSummaryContainerEl = document.getElementById('leaderSummaryContainer');
+    const arrivedCountEl = document.getElementById('arrivedCount');
+    const totalCountEl = document.getElementById('totalCount');
+    const leaderRosterEl = document.getElementById('leaderRoster');
+
     let stream = null;
     let scanTimer = null;
     let selectedPersonId = '';
+    let currentMode = 'checkin';
+    let currentLeaderData = null;
+    let currentEvent = null;
+    let currentFilter = 'all';
 
     bootstrap();
 
@@ -209,6 +396,47 @@
 
     async function bootstrap() {
       await loadActiveEvents();
+      setupModeButtons();
+      setupLeaderUI();
+    }
+
+    function setupModeButtons() {
+      modeCheckinBtn.addEventListener('click', () => switchMode('checkin'));
+      modeLeaderBtn.addEventListener('click', () => switchMode('leader'));
+    }
+
+    function switchMode(mode) {
+      currentMode = mode;
+      if (mode === 'checkin') {
+        checkinModeEl.style.display = 'block';
+        leaderModeEl.style.display = 'none';
+        modeCheckinBtn.classList.add('active');
+        modeLeaderBtn.classList.remove('active');
+      } else {
+        checkinModeEl.style.display = 'none';
+        leaderModeEl.style.display = 'block';
+        modeCheckinBtn.classList.remove('active');
+        modeLeaderBtn.classList.add('active');
+      }
+    }
+
+    function setupLeaderUI() {
+      btnVerifyLeader.addEventListener('click', verifyLeader);
+      leaderPhoneEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          verifyLeader();
+        }
+      });
+
+      document.querySelectorAll('.filter-btn').forEach(btn => {
+        btn.addEventListener('click', e => {
+          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          e.target.classList.add('active');
+          currentFilter = e.target.dataset.filter;
+          renderLeaderRoster();
+        });
+      });
     }
 
     btnStart.addEventListener('click', startScan);
@@ -445,6 +673,126 @@
       btnStart.disabled = false;
       btnStop.disabled = true;
       scanHintEl.textContent = '先按開始掃描，或手動貼上 QR 內容。';
+    }
+
+    // ===== 領隊模式函數 =====
+
+    async function verifyLeader() {
+      const phone = leaderPhoneEl.value.trim();
+      if (!phone) {
+        setMessage('err', '請輸入領隊手機號碼');
+        return;
+      }
+
+      btnVerifyLeader.disabled = true;
+      leaderVerifyingEl.style.display = 'block';
+      leaderVerifiedEl.style.display = 'none';
+      leaderEventsEl.innerHTML = '';
+      setMessage('ok', '驗證中...');
+
+      try {
+        const res = await apiCall({
+          intent: 'discover_leader_events',
+          leaderPhoneNumber: phone
+        });
+        if (!res.ok) throw new Error(res.message || '驗證失敗');
+
+        currentLeaderData = res.data;
+        leaderVerifyingEl.style.display = 'none';
+        leaderVerifiedEl.style.display = 'block';
+        renderLeaderEvents();
+        setMessage('ok', '驗證成功，請選擇活動');
+      } catch (e) {
+        setMessage('err', '驗證失敗: ' + e.message);
+        leaderVerifyingEl.style.display = 'none';
+      } finally {
+        btnVerifyLeader.disabled = false;
+      }
+    }
+
+    function renderLeaderEvents() {
+      if (!currentLeaderData || !currentLeaderData.items) return;
+
+      leaderEventsEl.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      currentLeaderData.items.forEach(event => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'result-item';
+        btn.textContent = event.eventName + ' (' + event.eventCode + ')';
+        btn.addEventListener('click', () => selectLeaderEvent(event));
+        frag.appendChild(btn);
+      });
+
+      leaderEventsEl.appendChild(frag);
+    }
+
+    async function selectLeaderEvent(event) {
+      currentEvent = event;
+      setMessage('ok', '載入簽到統計...');
+
+      try {
+        const res = await apiCall({
+          intent: 'leader_summary',
+          eventCode: event.eventCode,
+          rollCallCode: 'DEFAULT',
+          leaderPhoneNumber: leaderPhoneEl.value.trim(),
+          deviceId: getDeviceId()
+        });
+
+        if (!res.ok) throw new Error(res.message || '載入失敗');
+
+        renderLeaderSummary(res.data);
+        leaderSummaryContainerEl.style.display = 'block';
+        setMessage('ok', '就緒');
+      } catch (e) {
+        setMessage('err', '載入失敗: ' + e.message);
+      }
+    }
+
+    function renderLeaderSummary(data) {
+      const members = data.members || [];
+      const arrived = members.filter(m => m.status === 'arrived').length;
+      const total = members.length;
+
+      arrivedCountEl.textContent = arrived;
+      totalCountEl.textContent = total;
+
+      currentLeaderData.members = members;
+      renderLeaderRoster();
+    }
+
+    function renderLeaderRoster() {
+      if (!currentLeaderData || !currentLeaderData.members) return;
+
+      leaderRosterEl.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      const filtered = currentLeaderData.members.filter(member => {
+        if (currentFilter === 'all') return true;
+        if (currentFilter === 'arrived') return member.status === 'arrived' || member.status === 'leave';
+        if (currentFilter === 'pending') return member.status === 'pending';
+        return true;
+      });
+
+      filtered.forEach(member => {
+        const item = document.createElement('div');
+        item.className = 'roster-item ' + member.status;
+        
+        const statusText = member.status === 'arrived' ? '✓ 已到' : (member.status === 'pending' ? '未到' : '假');
+        const roomText = member.roomNo ? '房: ' + member.roomNo : '';
+        const carText = member.carNo ? '車: ' + member.carNo : '';
+
+        item.innerHTML = `
+          <div class="roster-name">${member.personName}</div>
+          <div class="roster-info">${roomText} ${carText}</div>
+          <div class="roster-status">${statusText}</div>
+        `;
+        frag.appendChild(item);
+      });
+
+      leaderRosterEl.appendChild(frag);
     }
   </script>
 </body>
