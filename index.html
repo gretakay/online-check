@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>手機簽到版</title>
+  <style>
+    :root {
+      --bg: #ecf5f1;
+      --card: #fff;
+      --line: #d6e3dc;
+      --text: #1f2a36;
+      --sub: #607283;
+      --ok: #0c7a5b;
+      --ok2: #13a06d;
+      --err: #b34444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Noto Sans TC", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: linear-gradient(180deg, #f8f4e9 0%, var(--bg) 100%);
+      min-height: 100vh;
+      padding: 12px;
+    }
+
+    .wrap { max-width: 620px; margin: 0 auto; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .08);
+    }
+
+    h1 { margin: 0; font-size: 26px; }
+    .sub { margin: 8px 0 14px; color: var(--sub); font-size: 13px; }
+    .field { display: grid; gap: 6px; margin-bottom: 10px; }
+    label { font-weight: 700; font-size: 14px; }
+
+    input, button {
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      font-size: 15px;
+      min-height: 44px;
+    }
+
+    button {
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--ok), var(--ok2));
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #f4f7f6;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    button:disabled { opacity: .55; cursor: not-allowed; }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .scanner {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px;
+      background: #fafdfb;
+      margin: 10px 0;
+    }
+
+    video {
+      width: 100%;
+      min-height: 180px;
+      background: #111;
+      border-radius: 10px;
+      object-fit: cover;
+      display: none;
+    }
+
+    .hint { margin-top: 8px; font-size: 12px; color: var(--sub); }
+
+    .search-box {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin-top: 10px;
+    }
+
+    .search-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .result-item {
+      margin-top: 8px;
+      width: 100%;
+      text-align: left;
+      background: #f6fbf8;
+      border: 1px solid #cde0d5;
+      color: var(--text);
+    }
+
+    .msg {
+      margin-top: 10px;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      display: none;
+      white-space: pre-wrap;
+    }
+
+    .msg.ok { display: block; background: #e7f7ef; color: #0c7a5b; }
+    .msg.err { display: block; background: #fdecec; color: var(--err); }
+
+    @media (max-width: 520px) {
+      .btn-row, .search-row { grid-template-columns: 1fr; }
+      h1 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>手機簽到</h1>
+      <p class="sub">Git 前端版，可直接串 Apps Script API</p>
+
+      <div class="field">
+        <label>Deployment ID</label>
+        <input id="deploymentId" value="AKfycbx2ApnFISmJHCyb5Aa_kK2UKdGAqMZlUSpx3EV6EpIhMKNxjF11EWRekXPqjK3-WH-o" />
+      </div>
+
+      <div class="field">
+        <label>活動代碼</label>
+        <input id="eventCode" placeholder="例如 EVT20260623" />
+      </div>
+
+      <div class="field">
+        <label>QR 內容</label>
+        <input id="identifier" placeholder="掃描或貼上 QR 字串" />
+      </div>
+
+      <div class="scanner">
+        <video id="video" playsinline muted></video>
+        <div class="btn-row">
+          <button id="btnStart" type="button">開始掃描</button>
+          <button id="btnStop" type="button" class="secondary" disabled>停止掃描</button>
+        </div>
+        <div id="scanHint" class="hint">先按開始掃描，或手動貼上 QR 內容。</div>
+      </div>
+
+      <div class="btn-row">
+        <button id="btnSubmit" type="button">手動送出</button>
+        <button id="btnLoadEvents" type="button" class="secondary">讀取活動</button>
+      </div>
+
+      <details class="search-box">
+        <summary>依姓名搜尋</summary>
+        <div class="search-row">
+          <input id="nameQuery" placeholder="輸入姓名關鍵字" />
+          <button id="btnSearch" type="button" class="secondary">搜尋</button>
+        </div>
+        <div id="searchResults"></div>
+      </details>
+
+      <div id="msg" class="msg"></div>
+    </section>
+  </main>
+
+  <script>
+    const eventCodeEl = document.getElementById('eventCode');
+    const identifierEl = document.getElementById('identifier');
+    const nameQueryEl = document.getElementById('nameQuery');
+    const deploymentIdEl = document.getElementById('deploymentId');
+    const videoEl = document.getElementById('video');
+    const scanHintEl = document.getElementById('scanHint');
+    const msgEl = document.getElementById('msg');
+    const searchResultsEl = document.getElementById('searchResults');
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const btnSubmit = document.getElementById('btnSubmit');
+    const btnSearch = document.getElementById('btnSearch');
+    const btnLoadEvents = document.getElementById('btnLoadEvents');
+
+    let stream = null;
+    let scanTimer = null;
+    let selectedPersonId = '';
+
+    bootstrap();
+
+    function getApiBase() {
+      const id = String(deploymentIdEl.value || '').trim();
+      return 'https://script.google.com/macros/s/' + id + '/exec';
+    }
+
+    async function bootstrap() {
+      await loadActiveEvents();
+    }
+
+    btnStart.addEventListener('click', startScan);
+    btnStop.addEventListener('click', stopScan);
+    btnSubmit.addEventListener('click', () => submitCheckin(false));
+    btnSearch.addEventListener('click', doSearch);
+    btnLoadEvents.addEventListener('click', loadActiveEvents);
+
+    nameQueryEl.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doSearch();
+      }
+    });
+
+    function setMessage(type, text) {
+      msgEl.className = 'msg ' + type;
+      msgEl.textContent = text;
+    }
+
+    function jsonp(url) {
+      return new Promise((resolve, reject) => {
+        const cbName = '__cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        const script = document.createElement('script');
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('JSONP timeout'));
+        }, 15000);
+
+        function cleanup() {
+          clearTimeout(timer);
+          delete window[cbName];
+          if (script.parentNode) {
+            script.parentNode.removeChild(script);
+          }
+        }
+
+        window[cbName] = data => {
+          cleanup();
+          resolve(data);
+        };
+
+        script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + encodeURIComponent(cbName);
+        script.onerror = () => {
+          cleanup();
+          reject(new Error('JSONP script load failed'));
+        };
+        document.body.appendChild(script);
+      });
+    }
+
+    async function apiCall(params) {
+      const q = new URLSearchParams({ api: '1', ...params });
+      const url = getApiBase() + '?' + q.toString();
+      return jsonp(url);
+    }
+
+    async function loadActiveEvents() {
+      setMessage('ok', '載入活動中...');
+      try {
+        const res = await apiCall({ intent: 'active_events' });
+        if (!res.ok) throw new Error(res.message || 'active_events 失敗');
+        const items = (res.data && res.data.items) || [];
+        if (res.data && res.data.preferredEventCode) {
+          eventCodeEl.value = res.data.preferredEventCode;
+        } else if (items[0]) {
+          eventCodeEl.value = items[0].eventCode;
+        }
+        setMessage('ok', '就緒，可直接掃描或手動送出');
+      } catch (e) {
+        setMessage('err', '載入活動失敗: ' + e.message);
+      }
+    }
+
+    async function doSearch() {
+      const eventCode = eventCodeEl.value.trim();
+      const nameQuery = nameQueryEl.value.trim();
+      if (!eventCode || !nameQuery) {
+        setMessage('err', '請輸入活動代碼與姓名關鍵字');
+        return;
+      }
+
+      btnSearch.disabled = true;
+      searchResultsEl.innerHTML = '';
+      setMessage('ok', '搜尋中...');
+
+      try {
+        const res = await apiCall({
+          intent: 'search',
+          eventCode,
+          nameQuery
+        });
+        if (!res.ok) throw new Error(res.message || res.code || '搜尋失敗');
+        renderSearchResults((res.data && res.data.items) || []);
+        setMessage('ok', '請點選正確人員');
+      } catch (e) {
+        setMessage('err', '搜尋失敗: ' + e.message);
+      } finally {
+        btnSearch.disabled = false;
+      }
+    }
+
+    function renderSearchResults(items) {
+      if (!items.length) {
+        searchResultsEl.innerHTML = '<div class="hint">查無資料</div>';
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      items.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'result-item';
+        btn.textContent = item.name + ' (' + item.personId + ')';
+        btn.addEventListener('click', () => {
+          selectedPersonId = item.personId;
+          identifierEl.value = item.personId;
+          setMessage('ok', '已選取: ' + item.name);
+        });
+        frag.appendChild(btn);
+      });
+      searchResultsEl.appendChild(frag);
+    }
+
+    async function submitCheckin(isAuto) {
+      const eventCode = eventCodeEl.value.trim();
+      const identifier = identifierEl.value.trim();
+      if (!eventCode || !identifier) {
+        setMessage('err', '請先填活動代碼與 QR 內容');
+        return;
+      }
+
+      btnSubmit.disabled = true;
+      if (!isAuto) setMessage('ok', '送出中...');
+
+      try {
+        const now = new Date().toISOString();
+        const res = await apiCall({
+          intent: 'submit',
+          requestId: 'r_' + randHex(),
+          eventCode,
+          identifierType: selectedPersonId ? 'personid' : 'qrcode',
+          identifier,
+          nonce: 'n_' + randHex(),
+          clientTimestamp: now,
+          deviceId: getDeviceId(),
+          source: 'git-static-web',
+          userAgent: navigator.userAgent
+        });
+
+        if (!res.ok) throw new Error((res.message || '送出失敗') + ' (' + (res.code || '') + ')');
+        identifierEl.value = '';
+        selectedPersonId = '';
+        setMessage('ok', '簽到成功: ' + ((res.data && res.data.personName) || ''));
+      } catch (e) {
+        setMessage('err', '送出失敗: ' + e.message);
+      } finally {
+        btnSubmit.disabled = false;
+      }
+    }
+
+    function randHex() {
+      const arr = new Uint8Array(8);
+      crypto.getRandomValues(arr);
+      return Array.from(arr).map(x => x.toString(16).padStart(2, '0')).join('');
+    }
+
+    function getDeviceId() {
+      const key = 'checkin_device_id';
+      let id = localStorage.getItem(key);
+      if (!id) {
+        id = 'd_' + randHex();
+        localStorage.setItem(key, id);
+      }
+      return id;
+    }
+
+    async function startScan() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setMessage('err', '此瀏覽器不支援相機，請手動貼上 QR');
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        videoEl.srcObject = stream;
+        videoEl.style.display = 'block';
+        await videoEl.play();
+
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        scanHintEl.textContent = '掃描中...';
+
+        if ('BarcodeDetector' in window) {
+          const detector = new BarcodeDetector({ formats: ['qr_code'] });
+          scanTimer = setInterval(async () => {
+            if (!videoEl.videoWidth) return;
+            try {
+              const codes = await detector.detect(videoEl);
+              if (!codes || !codes.length) return;
+              const raw = String(codes[0].rawValue || '').trim();
+              if (!raw) return;
+              identifierEl.value = raw;
+              stopScan();
+              submitCheckin(true);
+            } catch (error) {
+              // Keep scanning when detector throws intermittent frame errors.
+            }
+          }, 350);
+        } else {
+          scanHintEl.textContent = '此瀏覽器不支援即時 QR 偵測，請手動貼上 QR';
+        }
+      } catch (e) {
+        setMessage('err', '啟動相機失敗: ' + (e.message || e.name));
+        stopScan();
+      }
+    }
+
+    function stopScan() {
+      if (scanTimer) {
+        clearInterval(scanTimer);
+        scanTimer = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      videoEl.pause();
+      videoEl.srcObject = null;
+      videoEl.style.display = 'none';
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+      scanHintEl.textContent = '先按開始掃描，或手動貼上 QR 內容。';
+    }
+  </script>
+</body>
+</html>
