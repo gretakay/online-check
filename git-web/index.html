@@ -399,6 +399,15 @@
       <!-- 簽到模式 -->
       <div id="checkinMode" class="mode-content">
         <div class="field">
+          <label>領隊手機號碼（先驗證）</label>
+          <div class="search-row">
+            <input id="checkinLeaderPhone" placeholder="例如 0928014772" />
+            <button id="btnVerifyCheckinLeader" type="button" class="secondary">驗證領隊</button>
+          </div>
+          <div id="checkinLeaderStatus" class="hint">尚未驗證</div>
+        </div>
+
+        <div class="field">
           <label>活動代碼</label>
           <input id="eventCode" placeholder="例如 EVT20260623" />
         </div>
@@ -528,6 +537,9 @@
     const btnSubmit = document.getElementById('btnSubmit');
     const btnSearch = document.getElementById('btnSearch');
     const btnLoadEvents = document.getElementById('btnLoadEvents');
+    const checkinLeaderPhoneEl = document.getElementById('checkinLeaderPhone');
+    const btnVerifyCheckinLeader = document.getElementById('btnVerifyCheckinLeader');
+    const checkinLeaderStatusEl = document.getElementById('checkinLeaderStatus');
     const btnLoadCatalog = document.getElementById('btnLoadCatalog');
     const catalogSummaryEl = document.getElementById('catalogSummary');
     const catalogEventsEl = document.getElementById('catalogEvents');
@@ -564,6 +576,11 @@
     let selectedIds = {};
     let pendingRecords = {};
     let currentCatalog = null;
+    let checkinLeaderAuth = {
+      verified: false,
+      phone: '',
+      eventCodes: []
+    };
     const launchParams = parseLaunchParams();
 
     bootstrap();
@@ -585,10 +602,15 @@
 
     async function bootstrap() {
       leaderPhoneEl.value = localStorage.getItem('leader_phone_number') || '';
+      checkinLeaderPhoneEl.value = leaderPhoneEl.value;
       setupModeButtons();
       setupLeaderUI();
       await loadActiveEvents();
       await loadOpsCatalog();
+
+      if (checkinLeaderPhoneEl.value.trim()) {
+        await verifyCheckinLeader(false);
+      }
 
       if (launchParams.eventCode) {
         eventCodeEl.value = launchParams.eventCode;
@@ -654,9 +676,18 @@
     btnSubmit.addEventListener('click', () => submitCheckin(false));
     btnSearch.addEventListener('click', doSearch);
     btnLoadEvents.addEventListener('click', loadActiveEvents);
+    btnVerifyCheckinLeader.addEventListener('click', () => verifyCheckinLeader(true));
     btnLoadCatalog.addEventListener('click', () => loadOpsCatalog());
 
-    eventCodeEl.addEventListener('change', () => loadOpsCatalog());
+    eventCodeEl.addEventListener('change', async () => {
+      checkinLeaderAuth.verified = false;
+      renderCheckinLeaderStatus('活動已變更，請重新驗證領隊', false);
+      await loadOpsCatalog();
+    });
+    checkinLeaderPhoneEl.addEventListener('input', () => {
+      checkinLeaderAuth.verified = false;
+      renderCheckinLeaderStatus('尚未驗證', false);
+    });
     identifierEl.addEventListener('input', () => {
       if (identifierEl.value.trim() !== selectedPersonId) {
         selectedPersonId = '';
@@ -879,8 +910,15 @@
     async function submitCheckin(isAuto) {
       const eventCode = eventCodeEl.value.trim();
       const identifier = identifierEl.value.trim();
+      const leaderPhoneNumber = checkinLeaderPhoneEl.value.trim();
       if (!eventCode || !identifier) {
         setMessage('err', '請先填活動代碼與 QR 內容');
+        return;
+      }
+
+      const authorized = await ensureCheckinLeaderAuthorized(eventCode);
+      if (!authorized) {
+        setMessage('err', '請先完成領隊驗證，且領隊需有此活動權限');
         return;
       }
 
@@ -895,6 +933,7 @@
           eventCode,
           identifierType: selectedPersonId ? 'personid' : 'qrcode',
           identifier,
+          leaderPhoneNumber,
           nonce: 'n_' + randHex(),
           clientTimestamp: now,
           deviceId: getDeviceId(),
@@ -911,6 +950,84 @@
       } finally {
         btnSubmit.disabled = false;
       }
+    }
+
+    async function verifyCheckinLeader(showMessage) {
+      const phone = checkinLeaderPhoneEl.value.trim();
+      if (!phone) {
+        renderCheckinLeaderStatus('請輸入領隊手機號碼', false);
+        if (showMessage) {
+          setMessage('err', '請先輸入領隊手機號碼');
+        }
+        return false;
+      }
+
+      btnVerifyCheckinLeader.disabled = true;
+      renderCheckinLeaderStatus('驗證中...', false);
+
+      try {
+        const res = await apiCall({
+          intent: 'discover_leader_events',
+          leaderPhoneNumber: phone
+        });
+        if (!res.ok) {
+          throw new Error(res.message || '領隊驗證失敗');
+        }
+
+        const items = ((res.data && res.data.items) || []).map(item => item.eventCode);
+        checkinLeaderAuth = {
+          verified: true,
+          phone,
+          eventCodes: items
+        };
+
+        leaderPhoneEl.value = phone;
+        localStorage.setItem('leader_phone_number', phone);
+        renderCheckinLeaderStatus('驗證成功，可用活動: ' + items.join(', '), true);
+
+        if (showMessage) {
+          setMessage('ok', '領隊驗證成功');
+        }
+        return true;
+      } catch (e) {
+        checkinLeaderAuth = {
+          verified: false,
+          phone,
+          eventCodes: []
+        };
+        renderCheckinLeaderStatus('驗證失敗: ' + e.message, false);
+        if (showMessage) {
+          setMessage('err', '領隊驗證失敗: ' + e.message);
+        }
+        return false;
+      } finally {
+        btnVerifyCheckinLeader.disabled = false;
+      }
+    }
+
+    async function ensureCheckinLeaderAuthorized(eventCode) {
+      const phone = checkinLeaderPhoneEl.value.trim();
+      if (!phone) {
+        return false;
+      }
+
+      if (!checkinLeaderAuth.verified || checkinLeaderAuth.phone !== phone) {
+        const ok = await verifyCheckinLeader(false);
+        if (!ok) {
+          return false;
+        }
+      }
+
+      const allowed = checkinLeaderAuth.eventCodes.includes(eventCode);
+      if (!allowed) {
+        renderCheckinLeaderStatus('此領隊不在活動 ' + eventCode + ' 的授權清單中', false);
+      }
+      return allowed;
+    }
+
+    function renderCheckinLeaderStatus(text, isOk) {
+      checkinLeaderStatusEl.textContent = text;
+      checkinLeaderStatusEl.style.color = isOk ? 'var(--ok)' : 'var(--sub)';
     }
 
     function randHex() {
@@ -1001,6 +1118,7 @@
       }
 
       localStorage.setItem('leader_phone_number', phone);
+      checkinLeaderPhoneEl.value = phone;
       btnVerifyLeader.disabled = true;
       leaderVerifyingEl.style.display = 'block';
       leaderVerifiedEl.style.display = 'none';
@@ -1019,6 +1137,14 @@
         if (!res.ok) throw new Error(res.message || '驗證失敗');
 
         currentLeaderData = res.data;
+        checkinLeaderAuth = {
+          verified: true,
+          phone: phone,
+          eventCodes: ((res.data && res.data.items) || []).map(function(item) {
+            return item.eventCode;
+          })
+        };
+        renderCheckinLeaderStatus('已驗證，可用活動: ' + checkinLeaderAuth.eventCodes.join(', '), true);
         leaderVerifyingEl.style.display = 'none';
         leaderVerifiedEl.style.display = 'block';
         renderLeaderEvents();
