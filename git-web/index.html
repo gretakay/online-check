@@ -105,7 +105,7 @@
       padding: 10px;
       background: #f9fcfa;
       margin-top: 10px;
-      display: grid;
+      display: none;
       gap: 10px;
     }
 
@@ -130,9 +130,11 @@
       background: #fff;
       min-height: 120px;
       max-height: 220px;
-      overflow-y: auto;
+    .scanner-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
     }
-
     .catalog-title {
       font-size: 12px;
       font-weight: 700;
@@ -419,10 +421,12 @@
 
         <div class="scanner">
           <video id="video" playsinline muted></video>
-          <div class="btn-row">
+          <div class="scanner-actions">
             <button id="btnStart" type="button">開始掃描</button>
             <button id="btnStop" type="button" class="secondary" disabled>停止掃描</button>
+            <button id="btnPhotoScan" type="button" class="secondary">拍照辨識</button>
           </div>
+          <input id="photoScanInput" type="file" accept="image/*" capture="environment" style="display:none;" />
           <div id="scanHint" class="hint">先按開始掃描，或手動貼上 QR 內容。</div>
         </div>
 
@@ -523,6 +527,7 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <script>
     const eventCodeEl = document.getElementById('eventCode');
     const identifierEl = document.getElementById('identifier');
@@ -537,6 +542,8 @@
     const btnSubmit = document.getElementById('btnSubmit');
     const btnSearch = document.getElementById('btnSearch');
     const btnLoadEvents = document.getElementById('btnLoadEvents');
+    const btnPhotoScan = document.getElementById('btnPhotoScan');
+    const photoScanInput = document.getElementById('photoScanInput');
     const checkinLeaderPhoneEl = document.getElementById('checkinLeaderPhone');
     const btnVerifyCheckinLeader = document.getElementById('btnVerifyCheckinLeader');
     const checkinLeaderStatusEl = document.getElementById('checkinLeaderStatus');
@@ -576,6 +583,8 @@
     let selectedIds = {};
     let pendingRecords = {};
     let currentCatalog = null;
+    const scanCanvas = document.createElement('canvas');
+    const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
     let checkinLeaderAuth = {
       verified: false,
       phone: '',
@@ -606,7 +615,6 @@
       setupModeButtons();
       setupLeaderUI();
       await loadActiveEvents();
-      await loadOpsCatalog();
 
       if (checkinLeaderPhoneEl.value.trim()) {
         await verifyCheckinLeader(false);
@@ -676,13 +684,14 @@
     btnSubmit.addEventListener('click', () => submitCheckin(false));
     btnSearch.addEventListener('click', doSearch);
     btnLoadEvents.addEventListener('click', loadActiveEvents);
+    btnPhotoScan.addEventListener('click', () => photoScanInput.click());
+    photoScanInput.addEventListener('change', handlePhotoScanInput);
     btnVerifyCheckinLeader.addEventListener('click', () => verifyCheckinLeader(true));
     btnLoadCatalog.addEventListener('click', () => loadOpsCatalog());
 
     eventCodeEl.addEventListener('change', async () => {
       checkinLeaderAuth.verified = false;
       renderCheckinLeaderStatus('活動已變更，請重新驗證領隊', false);
-      await loadOpsCatalog();
     });
     checkinLeaderPhoneEl.addEventListener('input', () => {
       checkinLeaderAuth.verified = false;
@@ -1054,9 +1063,17 @@
 
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
           audio: false
         });
+        const track = stream.getVideoTracks()[0];
+        if (track) {
+          tuneVideoTrack(track);
+        }
         videoEl.srcObject = stream;
         videoEl.style.display = 'block';
         await videoEl.play();
@@ -1082,6 +1099,20 @@
             }
           }, 350);
           scanHintEl.textContent = '二維 QR code 掃描中...';
+        } else if (typeof window.jsQR === 'function' && scanCtx) {
+          scanTimer = setInterval(() => {
+            if (!videoEl.videoWidth || !videoEl.videoHeight) return;
+            try {
+              const raw = decodeQrFromVideoFrame_();
+              if (!raw) return;
+              identifierEl.value = raw;
+              stopScan();
+              submitCheckin(true);
+            } catch (error) {
+              // Ignore single frame failures and continue scanning.
+            }
+          }, 250);
+          scanHintEl.textContent = '二維 QR code 掃描中（相容模式），請靠近並保持穩定...';
         } else {
           scanHintEl.textContent = '此瀏覽器不支援即時 QR 偵測，請手動貼上 QR';
         }
@@ -1106,6 +1137,112 @@
       btnStart.disabled = false;
       btnStop.disabled = true;
       scanHintEl.textContent = '先按開始掃描，或手動貼上 QR 內容。';
+    }
+
+    function tuneVideoTrack(track) {
+      const capabilities = track.getCapabilities ? track.getCapabilities() : null;
+      if (!capabilities || !track.applyConstraints) {
+        return;
+      }
+
+      const advanced = [];
+      if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+        advanced.push({ focusMode: 'continuous' });
+      }
+      if (capabilities.zoom && capabilities.zoom.max && capabilities.zoom.max >= 1.5) {
+        const targetZoom = Math.min(1.8, capabilities.zoom.max);
+        advanced.push({ zoom: targetZoom });
+      }
+
+      if (!advanced.length) {
+        return;
+      }
+
+      track.applyConstraints({ advanced }).catch(() => {
+        // Ignore unsupported track constraints.
+      });
+    }
+
+    function decodeQrFromVideoFrame_() {
+      if (!scanCtx || !videoEl.videoWidth || !videoEl.videoHeight || typeof window.jsQR !== 'function') {
+        return '';
+      }
+
+      scanCanvas.width = videoEl.videoWidth;
+      scanCanvas.height = videoEl.videoHeight;
+      scanCtx.drawImage(videoEl, 0, 0, scanCanvas.width, scanCanvas.height);
+
+      let imageData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+      let found = window.jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'attemptBoth'
+      });
+
+      if (!found || !found.data) {
+        const cropW = Math.floor(scanCanvas.width * 0.72);
+        const cropH = Math.floor(scanCanvas.height * 0.72);
+        const cropX = Math.floor((scanCanvas.width - cropW) / 2);
+        const cropY = Math.floor((scanCanvas.height - cropH) / 2);
+        imageData = scanCtx.getImageData(cropX, cropY, cropW, cropH);
+        found = window.jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth'
+        });
+      }
+
+      return found && found.data ? String(found.data).trim() : '';
+    }
+
+    async function handlePhotoScanInput(event) {
+      const file = event.target && event.target.files ? event.target.files[0] : null;
+      if (!file) {
+        return;
+      }
+
+      try {
+        const raw = await decodeQrFromImageFile_(file);
+        if (!raw) {
+          setMessage('err', '照片中找不到 QR code，請重拍（充足光線、畫面含完整 QR）');
+          return;
+        }
+        identifierEl.value = raw;
+        setMessage('ok', '已從照片讀取 QR，準備送出');
+        submitCheckin(true);
+      } catch (error) {
+        setMessage('err', '照片辨識失敗: ' + (error.message || 'unknown error'));
+      } finally {
+        photoScanInput.value = '';
+      }
+    }
+
+    function decodeQrFromImageFile_(file) {
+      return new Promise((resolve, reject) => {
+        if (typeof window.jsQR !== 'function') {
+          reject(new Error('jsQR not available'));
+          return;
+        }
+
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('讀取照片失敗'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('照片格式不支援'));
+          img.onload = () => {
+            if (!scanCtx) {
+              reject(new Error('無法建立影像解析器'));
+              return;
+            }
+            scanCanvas.width = img.width;
+            scanCanvas.height = img.height;
+            scanCtx.drawImage(img, 0, 0, img.width, img.height);
+            const imageData = scanCtx.getImageData(0, 0, img.width, img.height);
+            const found = window.jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: 'attemptBoth'
+            });
+            resolve(found && found.data ? String(found.data).trim() : '');
+          };
+          img.src = String(reader.result || '');
+        };
+        reader.readAsDataURL(file);
+      });
     }
 
     // ===== 領隊模式函數 =====
