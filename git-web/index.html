@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>手機簽到版</title>
+  <title>手機簽到 Git 版</title>
   <style>
     :root {
       --bg: #ecf5f1;
@@ -188,6 +188,69 @@
       border: none;
     }
 
+    .station-strip {
+      display: grid;
+      gap: 8px;
+    }
+
+    .station-btn {
+      width: 100%;
+      text-align: left;
+      background: #fff;
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .station-btn.active {
+      border: none;
+      color: #fff;
+      background: linear-gradient(135deg, #16548c, #2d8ac2);
+    }
+
+    .leader-actions {
+      margin: 8px 0 2px;
+    }
+
+    .roster-item {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .member-pick {
+      width: 20px;
+      height: 20px;
+      accent-color: var(--ok);
+    }
+
+    .member-main {
+      min-width: 0;
+    }
+
+    .member-action {
+      min-width: 94px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: none;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--ok), var(--ok2));
+    }
+
+    .member-action.undo {
+      background: linear-gradient(135deg, #b34444, #d86a6a);
+    }
+
+    .member-action:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
     .roster-list {
       margin-top: 12px;
       max-height: 400px;
@@ -263,6 +326,7 @@
         <input id="deploymentId" value="AKfycbx2ApnFISmJHCyb5Aa_kK2UKdGAqMZlUSpx3EV6EpIhMKNxjF11EWRekXPqjK3-WH-o" />
       </div>
 
+      <!-- 簽到模式 -->
       <div id="checkinMode" class="mode-content">
         <div class="field">
           <label>活動代碼</label>
@@ -298,6 +362,7 @@
         </details>
       </div>
 
+      <!-- 領隊模式 -->
       <div id="leaderMode" class="mode-content" style="display:none;">
         <div class="field">
           <label>領隊手機號碼</label>
@@ -338,6 +403,16 @@
               </div>
             </div>
 
+            <div class="field">
+              <label>站點</label>
+              <div id="leaderStations" class="station-strip"></div>
+            </div>
+
+            <div class="btn-row leader-actions">
+              <button id="btnMarkSelected" type="button" class="secondary">標記勾選為已到</button>
+              <button id="btnSyncLeader" type="button" class="secondary">同步變更 (0)</button>
+            </div>
+
             <div id="leaderRoster" class="roster-list"></div>
           </div>
         </div>
@@ -376,6 +451,9 @@
     const arrivedCountEl = document.getElementById('arrivedCount');
     const totalCountEl = document.getElementById('totalCount');
     const leaderRosterEl = document.getElementById('leaderRoster');
+    const leaderStationsEl = document.getElementById('leaderStations');
+    const btnMarkSelected = document.getElementById('btnMarkSelected');
+    const btnSyncLeader = document.getElementById('btnSyncLeader');
 
     let stream = null;
     let scanTimer = null;
@@ -383,23 +461,51 @@
     let currentMode = 'checkin';
     let currentLeaderData = null;
     let currentEvent = null;
+    let currentRollCallCode = '';
+    let currentRollCallName = '';
     let currentFilter = 'all';
+    let selectedIds = {};
+    let pendingRecords = {};
+    const launchParams = parseLaunchParams();
 
-    // 啟動流程
     bootstrap();
+
+    function parseLaunchParams() {
+      const params = new URLSearchParams(window.location.search || '');
+      return {
+        mode: String(params.get('mode') || '').trim().toLowerCase(),
+        eventCode: String(params.get('eventCode') || '').trim(),
+        rollCallCode: String(params.get('rollCallCode') || '').trim(),
+        leaderPhone: String(params.get('leaderPhone') || params.get('leaderPhoneNumber') || '').trim()
+      };
+    }
 
     function getApiBase() {
       const id = String(deploymentIdEl.value || '').trim();
       return 'https://script.google.com/macros/s/' + id + '/exec';
     }
 
-    function bootstrap() {
-      // 1. 優先初始化 UI 事件繫結，確保介面一定能顯示且能切換
+    async function bootstrap() {
+      leaderPhoneEl.value = localStorage.getItem('leader_phone_number') || '';
       setupModeButtons();
       setupLeaderUI();
-      
-      // 2. 讓 API 在背景載入，即使卡住或失敗，介面也不會消失
-      loadActiveEvents();
+      await loadActiveEvents();
+
+      if (launchParams.eventCode) {
+        eventCodeEl.value = launchParams.eventCode;
+      }
+      if (launchParams.leaderPhone) {
+        leaderPhoneEl.value = launchParams.leaderPhone;
+      }
+
+      if (launchParams.mode === 'leader') {
+        switchMode('leader');
+        if (leaderPhoneEl.value.trim()) {
+          await verifyLeader();
+        }
+      }
+
+      updateLeaderActionUi();
     }
 
     function setupModeButtons() {
@@ -431,11 +537,14 @@
         }
       });
 
+      btnMarkSelected.addEventListener('click', markSelectedAsArrived);
+      btnSyncLeader.addEventListener('click', syncLeaderChanges);
+
       document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', e => {
           document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-          e.target.classList.add('active');
-          currentFilter = e.target.dataset.filter;
+          btn.classList.add('active');
+          currentFilter = btn.dataset.filter;
           renderLeaderRoster();
         });
       });
@@ -465,7 +574,7 @@
         const script = document.createElement('script');
         const timer = setTimeout(() => {
           cleanup();
-          reject(new Error('連線逾時 (請檢查 Deployment ID 是否正確)'));
+          reject(new Error('JSONP timeout'));
         }, 15000);
 
         function cleanup() {
@@ -484,7 +593,7 @@
         script.src = url + (url.includes('?') ? '&' : '?') + 'callback=' + encodeURIComponent(cbName);
         script.onerror = () => {
           cleanup();
-          reject(new Error('網路連線失敗或 API 網址錯誤'));
+          reject(new Error('JSONP script load failed'));
         };
         document.body.appendChild(script);
       });
@@ -497,19 +606,19 @@
     }
 
     async function loadActiveEvents() {
-      setMessage('ok', '正在背景載入活動中...');
+      setMessage('ok', '載入活動中...');
       try {
         const res = await apiCall({ intent: 'active_events' });
-        if (!res.ok) throw new Error(res.message || '無法取得 active_events');
+        if (!res.ok) throw new Error(res.message || 'active_events 失敗');
         const items = (res.data && res.data.items) || [];
         if (res.data && res.data.preferredEventCode) {
           eventCodeEl.value = res.data.preferredEventCode;
         } else if (items[0]) {
           eventCodeEl.value = items[0].eventCode;
         }
-        setMessage('ok', '初始化完畢，系統已就緒');
+        setMessage('ok', '就緒，可直接掃描或手動送出');
       } catch (e) {
-        setMessage('err', '載入預設活動失敗: ' + e.message + ' (您可以手動輸入活動代碼作業)');
+        setMessage('err', '載入活動失敗: ' + e.message);
       }
     }
 
@@ -533,7 +642,7 @@
         });
         if (!res.ok) throw new Error(res.message || res.code || '搜尋失敗');
         renderSearchResults((res.data && res.data.items) || []);
-        setMessage('ok', '請點選正確人員完成代簽');
+        setMessage('ok', '請點選正確人員');
       } catch (e) {
         setMessage('err', '搜尋失敗: ' + e.message);
       } finally {
@@ -543,7 +652,7 @@
 
     function renderSearchResults(items) {
       if (!items.length) {
-        searchResultsEl.innerHTML = '<div class="hint">查無符合條件的資料</div>';
+        searchResultsEl.innerHTML = '<div class="hint">查無資料</div>';
         return;
       }
 
@@ -556,7 +665,7 @@
         btn.addEventListener('click', () => {
           selectedPersonId = item.personId;
           identifierEl.value = item.personId;
-          setMessage('ok', '已選取: ' + item.name + '，請點擊「手動送出」');
+          setMessage('ok', '已選取: ' + item.name);
         });
         frag.appendChild(btn);
       });
@@ -567,12 +676,12 @@
       const eventCode = eventCodeEl.value.trim();
       const identifier = identifierEl.value.trim();
       if (!eventCode || !identifier) {
-        setMessage('err', '請填寫活動代碼與 QR 內容');
+        setMessage('err', '請先填活動代碼與 QR 內容');
         return;
       }
 
       btnSubmit.disabled = true;
-      if (!isAuto) setMessage('ok', '簽到資料送出中...');
+      if (!isAuto) setMessage('ok', '送出中...');
 
       try {
         const now = new Date().toISOString();
@@ -594,7 +703,7 @@
         selectedPersonId = '';
         setMessage('ok', '簽到成功: ' + ((res.data && res.data.personName) || ''));
       } catch (e) {
-        setMessage('err', '簽到失敗: ' + e.message);
+        setMessage('err', '送出失敗: ' + e.message);
       } finally {
         btnSubmit.disabled = false;
       }
@@ -618,7 +727,7 @@
 
     async function startScan() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setMessage('err', '此瀏覽器環境不支援或限制了相機權限，請手動輸入/貼上內容。');
+        setMessage('err', '此瀏覽器不支援相機，請手動貼上 QR');
         return;
       }
 
@@ -633,7 +742,7 @@
 
         btnStart.disabled = true;
         btnStop.disabled = false;
-        scanHintEl.textContent = '相機已啟動，正在對準 QR Code 掃描中...';
+        scanHintEl.textContent = '掃描中...';
 
         if ('BarcodeDetector' in window) {
           const detector = new BarcodeDetector({ formats: ['qr_code'] });
@@ -648,14 +757,14 @@
               stopScan();
               submitCheckin(true);
             } catch (error) {
-              // 忽略偵測期間的間歇性影格錯誤
+              // Keep scanning when detector throws intermittent frame errors.
             }
           }, 350);
         } else {
-          scanHintEl.textContent = '此瀏覽器原生不支援 BarcodeDetector API，請手動貼上 QR 內容。';
+          scanHintEl.textContent = '此瀏覽器不支援即時 QR 偵測，請手動貼上 QR';
         }
       } catch (e) {
-        setMessage('err', '開啟相機失敗: ' + (e.message || e.name));
+        setMessage('err', '啟動相機失敗: ' + (e.message || e.name));
         stopScan();
       }
     }
@@ -683,14 +792,19 @@
       const phone = leaderPhoneEl.value.trim();
       if (!phone) {
         setMessage('err', '請輸入領隊手機號碼');
-        return;
+        return false;
       }
 
+      localStorage.setItem('leader_phone_number', phone);
       btnVerifyLeader.disabled = true;
       leaderVerifyingEl.style.display = 'block';
       leaderVerifiedEl.style.display = 'none';
       leaderEventsEl.innerHTML = '';
-      setMessage('ok', '領隊權限驗證中...');
+      leaderStationsEl.innerHTML = '';
+      leaderRosterEl.innerHTML = '';
+      leaderSummaryContainerEl.style.display = 'none';
+      resetLeaderState();
+      setMessage('ok', '驗證中...');
 
       try {
         const res = await apiCall({
@@ -703,10 +817,22 @@
         leaderVerifyingEl.style.display = 'none';
         leaderVerifiedEl.style.display = 'block';
         renderLeaderEvents();
-        setMessage('ok', '驗證成功，請選擇下方活動查看名單');
+
+        const items = (currentLeaderData && currentLeaderData.items) || [];
+        const preferredEventCode = launchParams.eventCode || (currentLeaderData && currentLeaderData.preferredEventCode) || '';
+        const preferredEvent = items.find(e => e.eventCode === preferredEventCode) || items[0] || null;
+
+        if (preferredEvent) {
+          await selectLeaderEvent(preferredEvent, launchParams.rollCallCode || '');
+          setMessage('ok', '驗證成功，已載入指定活動與站點');
+        } else {
+          setMessage('ok', '驗證成功，請選擇活動');
+        }
+        return true;
       } catch (e) {
         setMessage('err', '驗證失敗: ' + e.message);
         leaderVerifyingEl.style.display = 'none';
+        return false;
       } finally {
         btnVerifyLeader.disabled = false;
       }
@@ -730,31 +856,134 @@
       leaderEventsEl.appendChild(frag);
     }
 
-    async function selectLeaderEvent(event) {
+    async function selectLeaderEvent(event, preferredRollCallCode) {
       currentEvent = event;
-      setMessage('ok', '正在抓取最新簽到統計與名單...');
+      resetLeaderState();
+      setMessage('ok', '載入站點中...');
+      await loadLeaderStations(event.eventCode, preferredRollCallCode || '');
+    }
+
+    function resetLeaderState() {
+      currentRollCallCode = '';
+      currentRollCallName = '';
+      selectedIds = {};
+      pendingRecords = {};
+      if (currentLeaderData) {
+        currentLeaderData.members = [];
+        currentLeaderData.stations = [];
+      }
+      arrivedCountEl.textContent = '0';
+      totalCountEl.textContent = '0';
+      updateLeaderActionUi();
+    }
+
+    async function loadLeaderStations(eventCode, preferredRollCallCode) {
+      if (!eventCode) {
+        setMessage('err', '缺少活動代碼');
+        return;
+      }
 
       try {
         const res = await apiCall({
-          intent: 'leader_summary',
-          eventCode: event.eventCode,
-          rollCallCode: 'DEFAULT',
+          intent: 'leader_stations',
+          eventCode,
           leaderPhoneNumber: leaderPhoneEl.value.trim(),
-          deviceId: getDeviceId()
+          deviceId: getDeviceId(),
+          requestId: 'r_' + randHex(),
+          nonce: 'n_' + randHex(),
+          clientTimestamp: new Date().toISOString(),
+          source: 'git-static-web',
+          userAgent: navigator.userAgent
         });
 
-        if (!res.ok) throw new Error(res.message || '名單載入失敗');
+        if (!res.ok) throw new Error(res.message || '載入站點失敗');
 
-        renderLeaderSummary(res.data);
-        leaderSummaryContainerEl.style.display = 'block';
-        setMessage('ok', '名單更新完成');
+        const stations = (res.data && res.data.stations) || [];
+        currentLeaderData.stations = stations;
+        renderLeaderStations(stations);
+
+        if (stations.length === 0) {
+          leaderSummaryContainerEl.style.display = 'none';
+          leaderRosterEl.innerHTML = '<div class="hint">目前無可用站點</div>';
+          setMessage('err', '這個活動目前沒有站點資料');
+          return;
+        }
+
+        const savedKey = 'leader_station_' + eventCode;
+        const savedStation = localStorage.getItem(savedKey) || '';
+        const fromUrl = String(preferredRollCallCode || '').trim();
+        const preferred = stations.find(s => s.rollCallCode === fromUrl) ||
+          stations.find(s => s.rollCallCode === savedStation) ||
+          stations[0];
+        await chooseLeaderStation(preferred);
       } catch (e) {
-        setMessage('err', '載入名單失敗: ' + e.message);
+        setMessage('err', '載入站點失敗: ' + e.message);
       }
     }
 
+    function renderLeaderStations(stations) {
+      leaderStationsEl.innerHTML = '';
+      const frag = document.createDocumentFragment();
+
+      stations.forEach(station => {
+        const btn = document.createElement('button');
+        const summary = station.summary || {};
+        btn.type = 'button';
+        btn.className = 'station-btn' + (station.rollCallCode === currentRollCallCode ? ' active' : '');
+        btn.innerHTML = '<strong>' + escapeHtml(station.rollCallName || station.rollCallCode) + '</strong>' +
+          '<div class="hint">' + escapeHtml(station.rollCallCode || '') + ' | 已到 ' +
+          String(summary.arrived || 0) + ' / ' + String(summary.total || 0) + '</div>';
+        btn.addEventListener('click', () => chooseLeaderStation(station));
+        frag.appendChild(btn);
+      });
+
+      leaderStationsEl.appendChild(frag);
+    }
+
+    async function chooseLeaderStation(station) {
+      if (!station || !station.rollCallCode || !currentEvent) {
+        return;
+      }
+
+      currentRollCallCode = station.rollCallCode;
+      currentRollCallName = station.rollCallName || station.rollCallCode;
+      selectedIds = {};
+      pendingRecords = {};
+      localStorage.setItem('leader_station_' + currentEvent.eventCode, currentRollCallCode);
+      renderLeaderStations(currentLeaderData.stations || []);
+      setMessage('ok', '載入站點名單中...');
+      await fetchLeaderSummary();
+    }
+
+    async function fetchLeaderSummary() {
+      if (!currentEvent || !currentRollCallCode) {
+        return;
+      }
+
+      const res = await apiCall({
+        intent: 'leader_summary',
+        eventCode: currentEvent.eventCode,
+        rollCallCode: currentRollCallCode,
+        leaderPhoneNumber: leaderPhoneEl.value.trim(),
+        deviceId: getDeviceId(),
+        requestId: 'r_' + randHex(),
+        nonce: 'n_' + randHex(),
+        clientTimestamp: new Date().toISOString(),
+        source: 'git-static-web',
+        userAgent: navigator.userAgent
+      });
+
+      if (!res.ok) {
+        throw new Error(res.message || '載入名單失敗');
+      }
+
+      renderLeaderSummary(res.data);
+      leaderSummaryContainerEl.style.display = 'block';
+      setMessage('ok', currentRollCallName + ' 已就緒，可直接勾選名單');
+    }
+
     function renderLeaderSummary(data) {
-      const members = data.members || [];
+      const members = applyPendingRecords(data.members || []);
       const arrived = members.filter(m => m.status === 'arrived').length;
       const total = members.length;
 
@@ -763,6 +992,21 @@
 
       currentLeaderData.members = members;
       renderLeaderRoster();
+      updateLeaderActionUi();
+    }
+
+    function applyPendingRecords(members) {
+      return members.map(member => {
+        const pending = pendingRecords[member.personId];
+        if (!pending) {
+          return member;
+        }
+        return {
+          ...member,
+          status: pending.status === 'present' ? 'arrived' : 'pending',
+          arrivedAt: pending.status === 'present' ? pending.clientTimestamp : ''
+        };
+      });
     }
 
     function renderLeaderRoster() {
@@ -778,23 +1022,191 @@
         return true;
       });
 
+      if (!filtered.length) {
+        leaderRosterEl.innerHTML = '<div class="hint">目前篩選條件下沒有名單</div>';
+        updateLeaderActionUi();
+        return;
+      }
+
       filtered.forEach(member => {
         const item = document.createElement('div');
         item.className = 'roster-item ' + member.status;
-        
-        const statusText = member.status === 'arrived' ? '✓ 已到' : (member.status === 'pending' ? '未到' : '假');
+
+        const isArrived = member.status === 'arrived';
+        const isSelected = !!selectedIds[member.personId];
+        const statusText = isArrived ? '✓ 已到' : (member.status === 'pending' ? '未到' : '假');
         const roomText = member.roomNo ? '房: ' + member.roomNo : '';
         const carText = member.carNo ? '車: ' + member.carNo : '';
 
-        item.innerHTML = `
-          <div class="roster-name">${member.personName}</div>
-          <div class="roster-info">${roomText} ${carText}</div>
-          <div class="roster-status">${statusText}</div>
+        const pick = document.createElement('input');
+        pick.type = 'checkbox';
+        pick.className = 'member-pick';
+        pick.checked = isArrived || isSelected;
+        pick.disabled = isArrived;
+        pick.addEventListener('change', () => toggleMemberSelection(member.personId));
+        item.appendChild(pick);
+
+        const main = document.createElement('div');
+        main.className = 'member-main';
+        main.innerHTML = `
+          <div class="roster-name">${escapeHtml(member.personName || '')}</div>
+          <div class="roster-info">${escapeHtml([roomText, carText].filter(Boolean).join(' '))}</div>
+          <div class="roster-status">${escapeHtml(statusText)}</div>
         `;
+        item.appendChild(main);
+
+        const action = document.createElement('button');
+        action.type = 'button';
+        action.className = 'member-action' + (isArrived ? ' undo' : '');
+        action.textContent = isArrived ? '改未到' : '標已到';
+        action.addEventListener('click', () => {
+          queueMemberStatus(member.personId, isArrived ? 'pending' : 'arrived');
+        });
+        item.appendChild(action);
+
         frag.appendChild(item);
       });
 
       leaderRosterEl.appendChild(frag);
+      updateLeaderActionUi();
+    }
+
+    function toggleMemberSelection(personId) {
+      if (selectedIds[personId]) {
+        delete selectedIds[personId];
+      } else {
+        selectedIds[personId] = true;
+      }
+      updateLeaderActionUi();
+    }
+
+    function queueMemberStatus(personId, nextStatus) {
+      const member = (currentLeaderData.members || []).find(m => m.personId === personId);
+      if (!member) {
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const queueStatus = nextStatus === 'arrived' ? 'present' : 'absent';
+      pendingRecords[personId] = {
+        requestId: 'r_' + randHex(),
+        personId,
+        status: queueStatus,
+        clientTimestamp: now,
+        nonce: 'n_' + randHex()
+      };
+
+      if (nextStatus !== 'arrived') {
+        delete selectedIds[personId];
+      }
+
+      currentLeaderData.members = currentLeaderData.members.map(m => {
+        if (m.personId !== personId) {
+          return m;
+        }
+        return {
+          ...m,
+          status: nextStatus,
+          arrivedAt: nextStatus === 'arrived' ? now : ''
+        };
+      });
+
+      arrivedCountEl.textContent = String((currentLeaderData.members || []).filter(m => m.status === 'arrived').length);
+      totalCountEl.textContent = String((currentLeaderData.members || []).length);
+      renderLeaderRoster();
+    }
+
+    function markSelectedAsArrived() {
+      const ids = Object.keys(selectedIds);
+      if (!ids.length) {
+        setMessage('err', '請先勾選未到人員');
+        return;
+      }
+
+      ids.forEach(personId => {
+        queueMemberStatus(personId, 'arrived');
+        delete selectedIds[personId];
+      });
+
+      renderLeaderRoster();
+      setMessage('ok', '已先在本機標記 ' + ids.length + ' 人，請按同步');
+    }
+
+    async function syncLeaderChanges() {
+      if (!currentEvent || !currentRollCallCode) {
+        setMessage('err', '請先選擇活動與站點');
+        return;
+      }
+
+      const records = Object.values(pendingRecords);
+      if (!records.length) {
+        setMessage('ok', '沒有待同步資料');
+        return;
+      }
+
+      btnSyncLeader.disabled = true;
+      setMessage('ok', '同步中...');
+
+      try {
+        const res = await apiCall({
+          intent: 'leader_sync',
+          requestId: 'r_' + randHex(),
+          eventCode: currentEvent.eventCode,
+          rollCallCode: currentRollCallCode,
+          leaderPhoneNumber: leaderPhoneEl.value.trim(),
+          deviceId: getDeviceId(),
+          nonce: 'n_' + randHex(),
+          clientTimestamp: new Date().toISOString(),
+          source: 'git-static-web',
+          userAgent: navigator.userAgent,
+          records: JSON.stringify(records.map(r => ({
+            requestId: r.requestId,
+            personId: r.personId,
+            customer_id: r.personId,
+            status: r.status,
+            clientTimestamp: r.clientTimestamp,
+            client_timestamp: r.clientTimestamp,
+            nonce: r.nonce
+          })))
+        });
+
+        if (!res.ok) throw new Error(res.message || '同步失敗');
+
+        ((res.data && res.data.accepted) || []).forEach(item => {
+          delete pendingRecords[item.personId];
+        });
+        ((res.data && res.data.rejected) || []).forEach(item => {
+          delete pendingRecords[item.personId];
+        });
+
+        await fetchLeaderSummary();
+        setMessage('ok', res.message || '同步完成');
+      } catch (e) {
+        setMessage('err', '同步失敗: ' + e.message);
+      } finally {
+        btnSyncLeader.disabled = false;
+        updateLeaderActionUi();
+      }
+    }
+
+    function updateLeaderActionUi() {
+      const selectedCount = Object.keys(selectedIds).length;
+      const pendingCount = Object.keys(pendingRecords).length;
+
+      btnMarkSelected.textContent = selectedCount ? ('標記勾選為已到 (' + selectedCount + ')') : '標記勾選為已到';
+      btnMarkSelected.disabled = selectedCount === 0;
+
+      btnSyncLeader.textContent = '同步變更 (' + pendingCount + ')';
+      btnSyncLeader.disabled = pendingCount === 0;
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
   </script>
 </body>
