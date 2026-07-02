@@ -585,6 +585,7 @@
     let currentCatalog = null;
     const scanCanvas = document.createElement('canvas');
     const scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+    const ENABLE_PHOTO_SCAN = false;
     let checkinLeaderAuth = {
       verified: false,
       phone: '',
@@ -684,8 +685,13 @@
     btnSubmit.addEventListener('click', () => submitCheckin(false));
     btnSearch.addEventListener('click', doSearch);
     btnLoadEvents.addEventListener('click', loadActiveEvents);
-    btnPhotoScan.addEventListener('click', () => photoScanInput.click());
-    photoScanInput.addEventListener('change', handlePhotoScanInput);
+    if (ENABLE_PHOTO_SCAN) {
+      btnPhotoScan.addEventListener('click', () => photoScanInput.click());
+      photoScanInput.addEventListener('change', handlePhotoScanInput);
+    } else {
+      btnPhotoScan.style.display = 'none';
+      photoScanInput.disabled = true;
+    }
     btnVerifyCheckinLeader.addEventListener('click', () => verifyCheckinLeader(true));
     btnLoadCatalog.addEventListener('click', () => loadOpsCatalog());
 
