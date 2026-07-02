@@ -99,6 +99,75 @@
       margin-top: 10px;
     }
 
+    .catalog-panel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: #f9fcfa;
+      margin-top: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .catalog-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .catalog-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .catalog-list {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fff;
+      min-height: 120px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+
+    .catalog-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--sub);
+      margin-bottom: 8px;
+    }
+
+    .catalog-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #d8e5dd;
+      border-radius: 8px;
+      padding: 8px;
+      margin-bottom: 6px;
+      background: #f6fbf8;
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .catalog-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .catalog-item strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .catalog-item.selected {
+      border-color: var(--ok);
+      box-shadow: inset 0 0 0 1px var(--ok);
+    }
+
     .search-row {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -302,6 +371,7 @@
 
     @media (max-width: 520px) {
       .btn-row, .search-row { grid-template-columns: 1fr; }
+      .catalog-grid { grid-template-columns: 1fr; }
       h1 { font-size: 22px; }
       .filter-btn { padding: 6px 10px; }
     }
@@ -350,6 +420,28 @@
         <div class="btn-row">
           <button id="btnSubmit" type="button">手動送出</button>
           <button id="btnLoadEvents" type="button" class="secondary">讀取活動</button>
+        </div>
+
+        <div class="catalog-panel">
+          <div class="catalog-head">
+            <strong>可刷資料總覽</strong>
+            <button id="btnLoadCatalog" type="button" class="secondary">更新總覽</button>
+          </div>
+          <div id="catalogSummary" class="hint">尚未載入總覽</div>
+          <div class="catalog-grid">
+            <div class="catalog-list">
+              <div class="catalog-title">活動</div>
+              <div id="catalogEvents"></div>
+            </div>
+            <div class="catalog-list">
+              <div class="catalog-title">領隊</div>
+              <div id="catalogLeaders"></div>
+            </div>
+            <div class="catalog-list">
+              <div class="catalog-title">可刷人員</div>
+              <div id="catalogPeople"></div>
+            </div>
+          </div>
         </div>
 
         <details class="search-box">
@@ -436,6 +528,11 @@
     const btnSubmit = document.getElementById('btnSubmit');
     const btnSearch = document.getElementById('btnSearch');
     const btnLoadEvents = document.getElementById('btnLoadEvents');
+    const btnLoadCatalog = document.getElementById('btnLoadCatalog');
+    const catalogSummaryEl = document.getElementById('catalogSummary');
+    const catalogEventsEl = document.getElementById('catalogEvents');
+    const catalogLeadersEl = document.getElementById('catalogLeaders');
+    const catalogPeopleEl = document.getElementById('catalogPeople');
 
     // 領隊模式相關元素
     const modeCheckinBtn = document.getElementById('modeCheckin');
@@ -466,6 +563,7 @@
     let currentFilter = 'all';
     let selectedIds = {};
     let pendingRecords = {};
+    let currentCatalog = null;
     const launchParams = parseLaunchParams();
 
     bootstrap();
@@ -490,6 +588,7 @@
       setupModeButtons();
       setupLeaderUI();
       await loadActiveEvents();
+      await loadOpsCatalog();
 
       if (launchParams.eventCode) {
         eventCodeEl.value = launchParams.eventCode;
@@ -555,6 +654,14 @@
     btnSubmit.addEventListener('click', () => submitCheckin(false));
     btnSearch.addEventListener('click', doSearch);
     btnLoadEvents.addEventListener('click', loadActiveEvents);
+    btnLoadCatalog.addEventListener('click', () => loadOpsCatalog());
+
+    eventCodeEl.addEventListener('change', () => loadOpsCatalog());
+    identifierEl.addEventListener('input', () => {
+      if (identifierEl.value.trim() !== selectedPersonId) {
+        selectedPersonId = '';
+      }
+    });
 
     nameQueryEl.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
@@ -647,6 +754,103 @@
         setMessage('err', '搜尋失敗: ' + e.message);
       } finally {
         btnSearch.disabled = false;
+      }
+    }
+
+    async function loadOpsCatalog() {
+      const eventCode = eventCodeEl.value.trim();
+      btnLoadCatalog.disabled = true;
+      catalogSummaryEl.textContent = '總覽載入中...';
+
+      try {
+        const res = await apiCall({
+          intent: 'ops_catalog',
+          eventCode
+        });
+        if (!res.ok) throw new Error(res.message || '載入總覽失敗');
+        currentCatalog = (res.data || null);
+        renderCatalog(currentCatalog);
+      } catch (e) {
+        catalogSummaryEl.textContent = '載入失敗: ' + e.message;
+      } finally {
+        btnLoadCatalog.disabled = false;
+      }
+    }
+
+    function renderCatalog(data) {
+      const summary = data && data.summary ? data.summary : { events: 0, leaders: 0, stations: 0, people: 0 };
+      const selectedEventCode = String((data && data.selectedEventCode) || '').trim();
+
+      catalogSummaryEl.textContent =
+        '活動 ' + summary.events + ' / 領隊 ' + summary.leaders + ' / 站點 ' + summary.stations + ' / 可刷人員 ' + summary.people;
+
+      catalogEventsEl.innerHTML = '';
+      catalogLeadersEl.innerHTML = '';
+      catalogPeopleEl.innerHTML = '';
+
+      const eventFrag = document.createDocumentFragment();
+      ((data && data.events) || []).forEach(event => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'catalog-item' + (event.eventCode === selectedEventCode ? ' selected' : '');
+        btn.innerHTML = '<strong>' + escapeHtml(event.eventName || event.eventCode) + '</strong>' +
+          '<div>' + escapeHtml(event.eventCode || '') + '</div>' +
+          '<div>狀態: ' + escapeHtml(event.status || '-') + '</div>';
+        btn.addEventListener('click', async () => {
+          eventCodeEl.value = event.eventCode || '';
+          await loadOpsCatalog();
+        });
+        eventFrag.appendChild(btn);
+      });
+      if (!eventFrag.childNodes.length) {
+        catalogEventsEl.innerHTML = '<div class="hint">目前無啟用活動</div>';
+      } else {
+        catalogEventsEl.appendChild(eventFrag);
+      }
+
+      const leaderFrag = document.createDocumentFragment();
+      ((data && data.leaders) || []).forEach(leader => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'catalog-item';
+        const phone = leader.leaderPhoneNumber || '(未設定電話)';
+        btn.innerHTML = '<strong>' + escapeHtml(phone) + '</strong>' +
+          '<div>活動: ' + String((leader.eventCodes || []).length) + '</div>' +
+          '<div>站點: ' + String((leader.stations || []).length) + '</div>';
+        btn.addEventListener('click', () => {
+          switchMode('leader');
+          leaderPhoneEl.value = leader.leaderPhoneNumber || '';
+        });
+        leaderFrag.appendChild(btn);
+      });
+      if (!leaderFrag.childNodes.length) {
+        catalogLeadersEl.innerHTML = '<div class="hint">目前無領隊資料</div>';
+      } else {
+        catalogLeadersEl.appendChild(leaderFrag);
+      }
+
+      const peopleFrag = document.createDocumentFragment();
+      ((data && data.people) || []).forEach(person => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'catalog-item';
+        const rollCallLabel = (person.rollCalls || []).slice(0, 2).map(r => r.rollCallCode).join(', ');
+        const canScanText = person.canScan ? '可掃 QR' : '無 QR';
+        btn.innerHTML = '<strong>' + escapeHtml(person.personName || person.personId) + '</strong>' +
+          '<div>' + escapeHtml(person.personId || '') + ' | ' + escapeHtml(canScanText) + '</div>' +
+          '<div>' + escapeHtml(rollCallLabel || '無站點') + '</div>';
+        btn.addEventListener('click', () => {
+          selectedPersonId = person.personId;
+          identifierEl.value = person.personId;
+          switchMode('checkin');
+          setMessage('ok', '已選取 ' + (person.personName || person.personId) + '，可直接手動送出或掃 QR');
+        });
+        peopleFrag.appendChild(btn);
+      });
+      if (!peopleFrag.childNodes.length) {
+        catalogPeopleEl.innerHTML = '<div class="hint">此活動尚無可刷人員</div>';
+      } else {
+        catalogPeopleEl.appendChild(peopleFrag);
       }
     }
 
@@ -760,6 +964,7 @@
               // Keep scanning when detector throws intermittent frame errors.
             }
           }, 350);
+          scanHintEl.textContent = '二維 QR code 掃描中...';
         } else {
           scanHintEl.textContent = '此瀏覽器不支援即時 QR 偵測，請手動貼上 QR';
         }
